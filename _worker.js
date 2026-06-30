@@ -1,4 +1,4 @@
-// _worker.js – GLM Chat with proper streaming (delta.reasoning)
+// _worker.js – GLM Chat with correct streaming (return ReadableStream directly)
 
 export default {
   async fetch(request, env) {
@@ -306,7 +306,7 @@ export default {
       sendBtn.disabled = true;
       isWaiting = true;
 
-      // Build conversation history from UI
+      // Build conversation history from UI (excluding partial)
       const messageElements = document.querySelectorAll('.message:not(.loading)');
       const messages = [];
       messageElements.forEach(el => {
@@ -338,9 +338,9 @@ export default {
             if (line.startsWith('data: ')) {
               try {
                 const json = JSON.parse(line.slice(6));
-                // 🔥 FIX: GLM sends content in delta.reasoning, not delta.content
+                // 🔥 FIX: GLM uses delta.reasoning for content
                 if (json.choices && json.choices[0] && json.choices[0].delta) {
-                  const content = json.choices[0].delta.content || json.choices[0].delta.reasoning || "";
+                  const content = json.choices[0].delta.reasoning || json.choices[0].delta.content || "";
                   if (content) {
                     partialText += content;
                     updatePartial(partialText);
@@ -402,38 +402,16 @@ export default {
         }
 
         if (stream) {
-          const encoder = new TextEncoder();
-          const readableStream = new ReadableStream({
-            async start(controller) {
-              try {
-                const response = await env.AI.run(
-                  "@cf/zai-org/glm-4.7-flash",
-                  {
-                    messages,
-                    stream: true,
-                    max_tokens: 1024,
-                    temperature: 0.7,
-                  }
-                );
-
-                // GLM streaming chunks: { choices: [{ delta: { reasoning: "..." } }] }
-                for await (const chunk of response) {
-                  const content = chunk.choices?.[0]?.delta?.reasoning || chunk.choices?.[0]?.delta?.content || "";
-                  if (content) {
-                    const data = JSON.stringify({ choices: [{ delta: { content } }] });
-                    controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-                  }
-                }
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
-                controller.close();
-              } catch (err) {
-                console.error('Stream error:', err);
-                controller.error(err);
-              }
-            }
+          // ✅ CORRECT: `env.AI.run()` with `stream: true` returns a ReadableStream directly.
+          const aiStream = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
+            messages,
+            stream: true,
+            max_tokens: 1024,
+            temperature: 0.7,
           });
 
-          return new Response(readableStream, {
+          // Return the stream as SSE – the client will parse it.
+          return new Response(aiStream, {
             headers: {
               "Content-Type": "text/event-stream",
               "Cache-Control": "no-cache",
@@ -441,7 +419,7 @@ export default {
             },
           });
         } else {
-          // Non-streaming: extract from message.content
+          // Non-streaming: extract from `choices[0].message.content`
           const result = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
             messages,
             max_tokens: 1024,
