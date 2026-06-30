@@ -1,10 +1,10 @@
-// _worker.js – Cloudflare Pages Advanced Mode (single-file Worker)
+// _worker.js – GLM Chat with correct response extraction
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // ----- Serve the HTML chat interface (root path) -----
+    // ----- Serve the HTML chat interface -----
     if (url.pathname === "/" && request.method === "GET") {
       const html = `<!DOCTYPE html>
 <html lang="en">
@@ -234,7 +234,6 @@ export default {
       text-decoration: none;
     }
 
-    /* ----- RESPONSIVE TWEAKS ----- */
     @media (max-width: 600px) {
       .chat-wrapper { border-radius: 20px; height: 95vh; max-height: none; }
       .messages { padding: 1rem; }
@@ -269,7 +268,6 @@ export default {
 
     let isWaiting = false;
 
-    // ----- Append a message to the UI -----
     function appendMessage(role, content, isPartial = false) {
       const div = document.createElement('div');
       div.className = \`message \${role}\`;
@@ -277,24 +275,19 @@ export default {
         div.classList.add('partial');
         div.id = 'partial-message';
       }
-      // Support markdown-like code blocks? We'll keep plain text for simplicity.
       div.textContent = content;
       messageContainer.appendChild(div);
       messageContainer.scrollTop = messageContainer.scrollHeight;
       return div;
     }
 
-    // ----- Update partial message (streaming) -----
     function updatePartial(content) {
       let partial = document.getElementById('partial-message');
-      if (!partial) {
-        partial = appendMessage('assistant', '', true);
-      }
+      if (!partial) partial = appendMessage('assistant', '', true);
       partial.textContent = content;
       messageContainer.scrollTop = messageContainer.scrollHeight;
     }
 
-    // ----- Finalize partial (remove the partial class and id) -----
     function finalizePartial() {
       const partial = document.getElementById('partial-message');
       if (partial) {
@@ -303,17 +296,13 @@ export default {
       }
     }
 
-    // ----- Show a loading indicator (non‑streaming fallback) -----
     function showLoading() {
       const div = appendMessage('assistant', '⏳ Thinking...', false);
       div.classList.add('loading');
       return div;
     }
-    function removeLoading(el) {
-      if (el && el.parentNode) el.remove();
-    }
+    function removeLoading(el) { if (el && el.parentNode) el.remove(); }
 
-    // ----- Send a message to the Worker -----
     async function sendMessage() {
       const text = userInput.value.trim();
       if (!text || isWaiting) return;
@@ -324,12 +313,11 @@ export default {
       sendBtn.disabled = true;
       isWaiting = true;
 
-      // Build conversation history from the UI (excluding partial/loading)
+      // Build conversation history from UI
       const messageElements = document.querySelectorAll('.message:not(.loading)');
       const messages = [];
       messageElements.forEach(el => {
         const role = el.classList.contains('user') ? 'user' : 'assistant';
-        // Skip if it's the partial message (we'll only include finalised messages)
         if (el.id === 'partial-message') return;
         const content = el.textContent.trim();
         if (content) messages.push({ role, content });
@@ -357,8 +345,9 @@ export default {
             if (line.startsWith('data: ')) {
               try {
                 const json = JSON.parse(line.slice(6));
-                if (json.response) {
-                  partialText += json.response;
+                // Streaming chunks: { choices: [{ delta: { content: "..." } }] }
+                if (json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content) {
+                  partialText += json.choices[0].delta.content;
                   updatePartial(partialText);
                 }
                 if (json.done) {
@@ -368,11 +357,10 @@ export default {
             }
           }
         }
-        finalizePartial(); // ensure finalised
+        finalizePartial();
 
       } catch (error) {
         console.error('Chat error:', error);
-        // Remove any partial message
         const partial = document.getElementById('partial-message');
         if (partial) partial.remove();
         appendMessage('assistant', \`⚠️ Error: \${error.message}\`);
@@ -384,25 +372,18 @@ export default {
       }
     }
 
-    // ----- Event listeners -----
     sendBtn.addEventListener('click', sendMessage);
-
     userInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendMessage();
       }
     });
-
     userInput.addEventListener('input', () => {
       userInput.style.height = 'auto';
       userInput.style.height = userInput.scrollHeight + 'px';
     });
-
     userInput.focus();
-
-    // ----- Optional: handle any incident note -----
-    console.log('GLM chat ready. If you see errors, check Cloudflare status for Workers AI incidents.');
   })();
 </script>
 </body>
@@ -431,21 +412,23 @@ export default {
           const readableStream = new ReadableStream({
             async start(controller) {
               try {
-                // Use the EXACT model ID and messages format
                 const response = await env.AI.run(
                   "@cf/zai-org/glm-4.7-flash",
                   {
-                    messages,          // must be in chat format
+                    messages,          // chat format, NOT prompt
                     stream: true,
                     max_tokens: 1024,
                     temperature: 0.7,
                   }
                 );
 
-                // `response` is an AsyncIterable of { response: string }
+                // Streaming response: each chunk is { choices: [{ delta: { content: "..." } }] }
                 for await (const chunk of response) {
-                  const data = JSON.stringify({ response: chunk.response });
-                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                  const content = chunk.choices?.[0]?.delta?.content || "";
+                  if (content) {
+                    const data = JSON.stringify({ choices: [{ delta: { content } }] });
+                    controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                  }
                 }
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
                 controller.close();
@@ -464,13 +447,15 @@ export default {
             },
           });
         } else {
-          // Non‑streaming fallback
+          // Non‑streaming: extract the content correctly
           const result = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
             messages,
             max_tokens: 1024,
             temperature: 0.7,
           });
-          return new Response(JSON.stringify({ response: result.response }), {
+          // result is { choices: [{ message: { content: "..." } }] }
+          const content = result.choices?.[0]?.message?.content || "";
+          return new Response(JSON.stringify({ response: content }), {
             headers: { "Content-Type": "application/json" },
           });
         }
@@ -483,7 +468,7 @@ export default {
       }
     }
 
-    // ----- 404 for anything else -----
+    // ----- 404 for any other route -----
     return new Response("Not Found", { status: 404 });
   },
 };
