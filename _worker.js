@@ -1,4 +1,4 @@
-// _worker.js – GLM Chat with correct response extraction
+// _worker.js – GLM Chat with proper streaming (delta.reasoning)
 
 export default {
   async fetch(request, env) {
@@ -296,13 +296,6 @@ export default {
       }
     }
 
-    function showLoading() {
-      const div = appendMessage('assistant', '⏳ Thinking...', false);
-      div.classList.add('loading');
-      return div;
-    }
-    function removeLoading(el) { if (el && el.parentNode) el.remove(); }
-
     async function sendMessage() {
       const text = userInput.value.trim();
       if (!text || isWaiting) return;
@@ -345,10 +338,13 @@ export default {
             if (line.startsWith('data: ')) {
               try {
                 const json = JSON.parse(line.slice(6));
-                // Streaming chunks: { choices: [{ delta: { content: "..." } }] }
-                if (json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content) {
-                  partialText += json.choices[0].delta.content;
-                  updatePartial(partialText);
+                // 🔥 FIX: GLM sends content in delta.reasoning, not delta.content
+                if (json.choices && json.choices[0] && json.choices[0].delta) {
+                  const content = json.choices[0].delta.content || json.choices[0].delta.reasoning || "";
+                  if (content) {
+                    partialText += content;
+                    updatePartial(partialText);
+                  }
                 }
                 if (json.done) {
                   finalizePartial();
@@ -368,7 +364,6 @@ export default {
         sendBtn.disabled = false;
         isWaiting = false;
         userInput.focus();
-        document.querySelectorAll('.loading').forEach(el => el.remove());
       }
     }
 
@@ -406,7 +401,6 @@ export default {
           });
         }
 
-        // If streaming is requested
         if (stream) {
           const encoder = new TextEncoder();
           const readableStream = new ReadableStream({
@@ -415,16 +409,16 @@ export default {
                 const response = await env.AI.run(
                   "@cf/zai-org/glm-4.7-flash",
                   {
-                    messages,          // chat format, NOT prompt
+                    messages,
                     stream: true,
                     max_tokens: 1024,
                     temperature: 0.7,
                   }
                 );
 
-                // Streaming response: each chunk is { choices: [{ delta: { content: "..." } }] }
+                // GLM streaming chunks: { choices: [{ delta: { reasoning: "..." } }] }
                 for await (const chunk of response) {
-                  const content = chunk.choices?.[0]?.delta?.content || "";
+                  const content = chunk.choices?.[0]?.delta?.reasoning || chunk.choices?.[0]?.delta?.content || "";
                   if (content) {
                     const data = JSON.stringify({ choices: [{ delta: { content } }] });
                     controller.enqueue(encoder.encode(`data: ${data}\n\n`));
@@ -447,13 +441,12 @@ export default {
             },
           });
         } else {
-          // Non‑streaming: extract the content correctly
+          // Non-streaming: extract from message.content
           const result = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
             messages,
             max_tokens: 1024,
             temperature: 0.7,
           });
-          // result is { choices: [{ message: { content: "..." } }] }
           const content = result.choices?.[0]?.message?.content || "";
           return new Response(JSON.stringify({ response: content }), {
             headers: { "Content-Type": "application/json" },
@@ -468,7 +461,6 @@ export default {
       }
     }
 
-    // ----- 404 for any other route -----
     return new Response("Not Found", { status: 404 });
   },
 };
