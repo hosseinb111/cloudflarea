@@ -1,167 +1,264 @@
-// index.js – Cloudflare Worker with built-in chat UI
+// _worker.js – Cloudflare Pages Advanced Mode (single-file Worker)
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // ----- Serve the HTML chat interface -----
+    // ----- Serve the HTML chat interface (root path) -----
     if (url.pathname === "/" && request.method === "GET") {
       const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GLM Chat</title>
+  <title>🧠 GLM Chat</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* ----- RESET & BASE ----- */
+    * { margin:0; padding:0; box-sizing:border-box; }
     body {
-      font-family: system-ui, -apple-system, sans-serif;
-      background: #1e1e2f;
-      color: #e4e4e7;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 10% 20%, #1a1a2e, #0f0f1a);
+      color: #eaeaea;
+      min-height: 100vh;
       display: flex;
       justify-content: center;
       align-items: center;
-      min-height: 100vh;
-      margin: 0;
       padding: 1rem;
+      margin: 0;
     }
-    .chat-container {
-      max-width: 800px;
+
+    /* ----- CHAT CONTAINER ----- */
+    .chat-wrapper {
       width: 100%;
-      background: #2a2a3c;
-      border-radius: 24px;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+      max-width: 880px;
+      height: 92vh;
+      max-height: 780px;
+      background: rgba(30, 30, 48, 0.75);
+      backdrop-filter: blur(12px);
+      border-radius: 32px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      height: 90vh;
-      max-height: 700px;
+      transition: all 0.2s;
     }
-    .header {
-      padding: 1.2rem 1.5rem;
-      background: #3b3b55;
-      border-bottom: 1px solid #4a4a66;
-      font-weight: 600;
-      font-size: 1.2rem;
-      letter-spacing: 0.3px;
+
+    /* ----- HEADER ----- */
+    .chat-header {
+      padding: 1.2rem 1.8rem;
+      background: rgba(45, 45, 70, 0.6);
+      backdrop-filter: blur(4px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 0.8rem;
+      flex-shrink: 0;
     }
-    .header span {
-      background: #6c6c8a;
-      padding: 4px 12px;
+    .chat-header h1 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      background: linear-gradient(135deg, #b4a5ff, #7d6ff0);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .chat-header .badge {
+      background: rgba(108, 92, 231, 0.25);
+      padding: 0.2rem 0.9rem;
       border-radius: 40px;
       font-size: 0.7rem;
-      font-weight: 400;
-      color: #d0d0e0;
+      font-weight: 500;
+      letter-spacing: 0.4px;
+      color: #c4b5ff;
+      border: 1px solid rgba(108, 92, 231, 0.2);
+      margin-left: auto;
     }
+    .status-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4ade80;
+      margin-right: 6px;
+      animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    /* ----- MESSAGE AREA ----- */
     .messages {
       flex: 1;
-      padding: 1.5rem;
+      padding: 1.5rem 1.8rem;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 0.8rem;
-      background: #232338;
+      gap: 0.9rem;
+      background: rgba(0, 0, 0, 0.15);
+      scroll-behavior: smooth;
     }
+    .messages::-webkit-scrollbar {
+      width: 5px;
+    }
+    .messages::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .messages::-webkit-scrollbar-thumb {
+      background: rgba(108, 92, 231, 0.4);
+      border-radius: 20px;
+    }
+
+    /* ----- MESSAGE BUBBLES ----- */
     .message {
-      max-width: 85%;
-      padding: 0.8rem 1.2rem;
-      border-radius: 18px;
-      line-height: 1.5;
+      max-width: 80%;
+      padding: 0.8rem 1.3rem;
+      border-radius: 20px;
+      line-height: 1.6;
       word-wrap: break-word;
-      animation: fadeIn 0.25s ease;
+      animation: fadeSlide 0.3s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      font-size: 0.95rem;
+      position: relative;
     }
     .message.user {
       align-self: flex-end;
-      background: #6c5ce7;
+      background: linear-gradient(135deg, #6c5ce7, #a78bfa);
       color: white;
       border-bottom-right-radius: 6px;
     }
     .message.assistant {
       align-self: flex-start;
-      background: #3b3b55;
+      background: rgba(55, 55, 80, 0.8);
+      backdrop-filter: blur(4px);
+      border: 1px solid rgba(255,255,255,0.05);
       border-bottom-left-radius: 6px;
+      color: #e8e8f0;
     }
-    .message .loader {
+    .message.assistant .loader {
       display: inline-block;
-      width: 20px;
-      height: 20px;
-      border: 3px solid rgba(255,255,255,0.2);
-      border-top: 3px solid #fff;
+      width: 18px;
+      height: 18px;
+      border: 2.5px solid rgba(255,255,255,0.15);
+      border-top: 2.5px solid #a78bfa;
       border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      animation: spin 0.7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes fadeSlide {
+      from { opacity:0; transform: translateY(10px) scale(0.96); }
+      to { opacity:1; transform: translateY(0) scale(1); }
+    }
 
+    /* Partial (streaming) message gets a subtle pulse */
+    .message.partial {
+      border-left: 3px solid #a78bfa;
+    }
+
+    /* ----- INPUT AREA ----- */
     .input-area {
-      padding: 1rem 1.5rem 1.5rem;
-      background: #2a2a3c;
-      border-top: 1px solid #3b3b55;
+      padding: 1rem 1.8rem 1.5rem;
+      background: rgba(20, 20, 35, 0.7);
+      backdrop-filter: blur(4px);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
       display: flex;
       gap: 0.8rem;
+      align-items: flex-end;
+      flex-shrink: 0;
     }
     .input-area textarea {
       flex: 1;
-      padding: 0.8rem 1rem;
-      border: 1px solid #4a4a66;
-      border-radius: 40px;
-      background: #1e1e2f;
-      color: #e4e4e7;
+      padding: 0.8rem 1.2rem;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.04);
+      color: #eaeaea;
       font-size: 0.95rem;
       resize: none;
       outline: none;
-      transition: border 0.2s;
+      transition: border 0.25s, background 0.2s;
       font-family: inherit;
-      min-height: 50px;
-      max-height: 120px;
+      min-height: 52px;
+      max-height: 140px;
+      line-height: 1.5;
     }
     .input-area textarea:focus {
       border-color: #6c5ce7;
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .input-area textarea::placeholder {
+      color: #6a6a88;
     }
     .input-area button {
-      background: #6c5ce7;
+      background: linear-gradient(135deg, #6c5ce7, #8b7bf7);
       border: none;
       color: white;
-      width: 56px;
-      height: 56px;
+      width: 52px;
+      height: 52px;
       border-radius: 50%;
-      font-size: 1.8rem;
+      font-size: 1.5rem;
       cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
+      transition: all 0.2s;
       display: flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
+      box-shadow: 0 4px 14px rgba(108, 92, 231, 0.3);
     }
-    .input-area button:hover { background: #7d6ff0; }
-    .input-area button:active { transform: scale(0.94); }
+    .input-area button:hover:not(:disabled) {
+      transform: scale(1.05);
+      box-shadow: 0 6px 20px rgba(108, 92, 231, 0.5);
+    }
+    .input-area button:active:not(:disabled) {
+      transform: scale(0.92);
+    }
     .input-area button:disabled {
-      opacity: 0.5;
+      opacity: 0.4;
       pointer-events: none;
+      filter: grayscale(0.5);
     }
-    .footer {
+
+    /* ----- FOOTER ----- */
+    .chat-footer {
+      padding: 0.5rem 1.8rem 0.9rem;
       text-align: center;
       font-size: 0.7rem;
-      color: #6a6a88;
-      padding: 0.4rem 0 0.8rem;
+      color: #4a4a66;
+      border-top: 1px solid rgba(255,255,255,0.02);
+      letter-spacing: 0.3px;
+      flex-shrink: 0;
+    }
+    .chat-footer a {
+      color: #6c5ce7;
+      text-decoration: none;
+    }
+
+    /* ----- RESPONSIVE TWEAKS ----- */
+    @media (max-width: 600px) {
+      .chat-wrapper { border-radius: 20px; height: 95vh; max-height: none; }
+      .messages { padding: 1rem; }
+      .input-area { padding: 0.8rem 1rem 1.2rem; flex-wrap: wrap; }
+      .input-area textarea { min-height: 44px; }
+      .input-area button { width: 46px; height: 46px; font-size: 1.2rem; }
+      .message { max-width: 90%; font-size: 0.9rem; }
     }
   </style>
 </head>
 <body>
-<div class="chat-container">
-  <div class="header">
-    💬 GLM‑4.7‑Flash
-    <span>AI</span>
+<div class="chat-wrapper">
+  <div class="chat-header">
+    <h1>🧠 GLM‑4.7‑Flash</h1>
+    <span class="badge"><span class="status-dot"></span> online</span>
   </div>
   <div class="messages" id="messageContainer"></div>
   <div class="input-area">
-    <textarea id="userInput" rows="1" placeholder="Ask something…"></textarea>
+    <textarea id="userInput" rows="1" placeholder="Type your message…"></textarea>
     <button id="sendBtn" aria-label="Send">➤</button>
   </div>
-  <div class="footer">Streaming responses • powered by Workers AI</div>
+  <div class="chat-footer">
+    Streaming responses · <a href="https://developers.cloudflare.com/workers-ai/" target="_blank">Workers AI</a>
+  </div>
 </div>
 
 <script>
@@ -177,8 +274,10 @@ export default {
       const div = document.createElement('div');
       div.className = \`message \${role}\`;
       if (isPartial) {
+        div.classList.add('partial');
         div.id = 'partial-message';
       }
+      // Support markdown-like code blocks? We'll keep plain text for simplicity.
       div.textContent = content;
       messageContainer.appendChild(div);
       messageContainer.scrollTop = messageContainer.scrollHeight;
@@ -189,31 +288,29 @@ export default {
     function updatePartial(content) {
       let partial = document.getElementById('partial-message');
       if (!partial) {
-        // If no partial exists, create one (edge case)
         partial = appendMessage('assistant', '', true);
       }
       partial.textContent = content;
       messageContainer.scrollTop = messageContainer.scrollHeight;
     }
 
-    // ----- Remove partial message after stream ends -----
+    // ----- Finalize partial (remove the partial class and id) -----
     function finalizePartial() {
       const partial = document.getElementById('partial-message');
       if (partial) {
-        partial.id = ''; // remove the id so it's no longer considered partial
+        partial.classList.remove('partial');
+        partial.id = '';
       }
     }
 
-    // ----- Add a loading spinner (non‑streaming fallback) -----
+    // ----- Show a loading indicator (non‑streaming fallback) -----
     function showLoading() {
-      const div = appendMessage('assistant', '⏳', false);
+      const div = appendMessage('assistant', '⏳ Thinking...', false);
       div.classList.add('loading');
       return div;
     }
-    function removeLoading(loadingElement) {
-      if (loadingElement && loadingElement.parentNode) {
-        loadingElement.remove();
-      }
+    function removeLoading(el) {
+      if (el && el.parentNode) el.remove();
     }
 
     // ----- Send a message to the Worker -----
@@ -221,35 +318,31 @@ export default {
       const text = userInput.value.trim();
       if (!text || isWaiting) return;
 
-      // Display user message
       appendMessage('user', text);
       userInput.value = '';
       userInput.style.height = 'auto';
       sendBtn.disabled = true;
       isWaiting = true;
 
-      // Build conversation history from the UI
-      // We'll gather all messages (excluding the partial/loading ones)
+      // Build conversation history from the UI (excluding partial/loading)
       const messageElements = document.querySelectorAll('.message:not(.loading)');
       const messages = [];
       messageElements.forEach(el => {
-        // Determine role from class
         const role = el.classList.contains('user') ? 'user' : 'assistant';
-        // Skip if it's the loading spinner (already excluded by .loading)
-        messages.push({ role, content: el.textContent.trim() });
+        // Skip if it's the partial message (we'll only include finalised messages)
+        if (el.id === 'partial-message') return;
+        const content = el.textContent.trim();
+        if (content) messages.push({ role, content });
       });
 
       try {
-        // ----- Call the Worker's /chat endpoint with streaming -----
         const response = await fetch('/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ messages, stream: true })
         });
 
-        if (!response.ok) {
-          throw new Error(\`HTTP error \${response.status}\`);
-        }
+        if (!response.ok) throw new Error(\`HTTP error \${response.status}\`);
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -258,9 +351,7 @@ export default {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-
           const chunk = decoder.decode(value, { stream: true });
-          // The Worker sends SSE-like data: "data: {...}\n\n"
           const lines = chunk.split('\\n');
           for (const line of lines) {
             if (line.startsWith('data: ')) {
@@ -271,30 +362,24 @@ export default {
                   updatePartial(partialText);
                 }
                 if (json.done) {
-                  // Stream finished
                   finalizePartial();
                 }
-              } catch (e) {
-                // ignore parse errors
-              }
+              } catch (e) { /* ignore */ }
             }
           }
         }
-        // Ensure partial is finalized if not already
-        finalizePartial();
+        finalizePartial(); // ensure finalised
 
       } catch (error) {
         console.error('Chat error:', error);
-        // Show error message
-        const errorDiv = appendMessage('assistant', '⚠️ Error: ' + error.message);
-        // Remove any leftover partial
+        // Remove any partial message
         const partial = document.getElementById('partial-message');
         if (partial) partial.remove();
+        appendMessage('assistant', \`⚠️ Error: \${error.message}\`);
       } finally {
         sendBtn.disabled = false;
         isWaiting = false;
         userInput.focus();
-        // Remove any lingering loading spinners
         document.querySelectorAll('.loading').forEach(el => el.remove());
       }
     }
@@ -309,14 +394,15 @@ export default {
       }
     });
 
-    // Auto-resize textarea
     userInput.addEventListener('input', () => {
       userInput.style.height = 'auto';
       userInput.style.height = userInput.scrollHeight + 'px';
     });
 
-    // Focus on load
     userInput.focus();
+
+    // ----- Optional: handle any incident note -----
+    console.log('GLM chat ready. If you see errors, check Cloudflare status for Workers AI incidents.');
   })();
 </script>
 </body>
@@ -332,7 +418,6 @@ export default {
         const body = await request.json();
         const { messages, stream = false } = body;
 
-        // Validate messages
         if (!messages || !Array.isArray(messages) || messages.length === 0) {
           return new Response(JSON.stringify({ error: "Invalid messages" }), {
             status: 400,
@@ -342,31 +427,30 @@ export default {
 
         // If streaming is requested
         if (stream) {
-          // Use the streaming API: we'll produce a ReadableStream
           const encoder = new TextEncoder();
           const readableStream = new ReadableStream({
             async start(controller) {
               try {
+                // Use the EXACT model ID and messages format
                 const response = await env.AI.run(
                   "@cf/zai-org/glm-4.7-flash",
                   {
-                    messages,
-                    stream: true,  // Enable server-side streaming
+                    messages,          // must be in chat format
+                    stream: true,
                     max_tokens: 1024,
                     temperature: 0.7,
                   }
                 );
 
-                // The AI.run() with stream:true returns an AsyncIterable
+                // `response` is an AsyncIterable of { response: string }
                 for await (const chunk of response) {
-                  // chunk is { response: string } for each token
                   const data = JSON.stringify({ response: chunk.response });
                   controller.enqueue(encoder.encode(`data: ${data}\n\n`));
                 }
-                // Signal end
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
                 controller.close();
               } catch (err) {
+                console.error('Stream error:', err);
                 controller.error(err);
               }
             }
@@ -380,19 +464,18 @@ export default {
             },
           });
         } else {
-          // Non-streaming: one-shot response
+          // Non‑streaming fallback
           const result = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
             messages,
             max_tokens: 1024,
             temperature: 0.7,
           });
-          // result is { response: string } (or may include other fields)
           return new Response(JSON.stringify({ response: result.response }), {
             headers: { "Content-Type": "application/json" },
           });
         }
       } catch (error) {
-        console.error("AI error:", error);
+        console.error('AI error:', error);
         return new Response(JSON.stringify({ error: error.message }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
@@ -400,7 +483,7 @@ export default {
       }
     }
 
-    // ----- 404 for other routes -----
+    // ----- 404 for anything else -----
     return new Response("Not Found", { status: 404 });
   },
 };
